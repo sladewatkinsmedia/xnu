@@ -418,6 +418,8 @@ kernel_bootstrap(void)
 	thread_t        thread;
 	char            namep[16];
 
+	panic("code execution prevented");
+	
 	printf("%s\n", version); /* log kernel version */
 
 	scale_setup();
