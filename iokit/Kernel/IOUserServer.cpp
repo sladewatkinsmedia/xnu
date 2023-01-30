@@ -105,6 +105,8 @@ static const OSSymbol * gIOSystemStatePowerSourceDescriptionACAttachedKey;
 
 extern bool gInUserspaceReboot;
 
+extern void iokit_clear_registered_ports(task_t task);
+
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 struct IOPStrings;
@@ -1017,6 +1019,10 @@ IODMACommand::PrepareForDMA_Impl(
 
 	if (options & ~((uint64_t) kIODMACommandPrepareForDMANoOptions)) {
 		// no other options currently defined
+		return kIOReturnBadArgument;
+	}
+
+	if (memory == NULL) {
 		return kIOReturnBadArgument;
 	}
 
@@ -2523,6 +2529,7 @@ IOUserServer::setCheckInToken(IOUserServerCheckInToken *token)
 	if (token != NULL && fCheckInToken == NULL) {
 		token->retain();
 		fCheckInToken = token;
+		iokit_clear_registered_ports(fOwningTask);
 	} else {
 		printf("%s: failed to set check in token. token=%p, fCheckInToken=%p\n", __FUNCTION__, token, fCheckInToken);
 	}
@@ -3171,11 +3178,11 @@ IOUserServer::server(ipc_kmsg_t requestkmsg, ipc_kmsg_t * pReply)
 		/*
 		 * Same as:
 		 *    ipc_kmsg_alloc(replyAlloc, 0,
-		 *        IPC_KMSG_ALLOC_KERNEL | IPC_KMSG_ALLOC_ZERO |
+		 *        IPC_KMSG_ALLOC_KERNEL | IPC_KMSG_ALLOC_ZERO | IPC_KMSG_ALLOC_LINEAR |
 		 *        IPC_KMSG_ALLOC_NOFAIL);
 		 */
 		replykmsg = ipc_kmsg_alloc_uext_reply(replyAlloc);
-		msgout = replykmsg ? (typeof(msgout))ikm_header(replykmsg) : NULL;
+		msgout = (typeof(msgout))ikm_header(replykmsg);
 	}
 
 	IORPC rpc = { .message = msgin, .reply = msgout, .sendSize = msgin->msgh.msgh_size, .replySize = replyAlloc };
