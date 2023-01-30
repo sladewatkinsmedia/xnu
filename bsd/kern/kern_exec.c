@@ -3854,6 +3854,9 @@ do_fork1:
 	p->p_crash_behavior = crash_behavior;
 	p->p_crash_behavior_deadline = crash_behavior_deadline;
 
+	p->p_crash_count = px_sa.psa_crash_count;
+	p->p_throttle_timeout = px_sa.psa_throttle_timeout;
+
 	/* We'll need the subsystem root for setting up Apple strings */
 	imgp->ip_subsystem_root_path = p->p_subsystem_root_path;
 
@@ -4760,9 +4763,6 @@ proc_exec_switch_task(proc_t old_proc, proc_t new_proc, task_t old_task, task_t 
 		task_clear_exec_copy_flag(new_task);
 
 		task_copy_fields_for_exec(new_task, old_task);
-
-		/* Transfer sandbox filter bits to new_task. */
-		task_transfer_mach_filter_bits(new_task, old_task);
 
 		/*
 		 * Need to transfer pending watch port boosts to the new task

@@ -6902,6 +6902,7 @@ necp_client_add(struct proc *p, struct necp_fd_data *fd_data, struct necp_client
 
 	client = kalloc_type(struct necp_client, Z_WAITOK | Z_ZERO | Z_NOFAIL);
 	client->parameters = kalloc_data(buffer_size, Z_WAITOK | Z_NOFAIL);
+	client->parameters_length = buffer_size;
 	lck_mtx_init(&client->lock, &necp_fd_mtx_grp, &necp_fd_mtx_attr);
 	lck_mtx_init(&client->route_lock, &necp_fd_mtx_grp, &necp_fd_mtx_attr);
 
@@ -6913,7 +6914,6 @@ necp_client_add(struct proc *p, struct necp_fd_data *fd_data, struct necp_client
 
 	os_ref_init(&client->reference_count, &necp_client_refgrp); // Hold our reference until close
 
-	client->parameters_length = buffer_size;
 	client->proc_pid = fd_data->proc_pid; // Save off proc pid in case the client will persist past fd
 	client->agent_handle = (void *)fd_data;
 	client->platform_binary = ((csproc_get_platform_binary(p) == 0) ? 0 : 1);
@@ -6983,6 +6983,7 @@ necp_client_add(struct proc *p, struct necp_fd_data *fd_data, struct necp_client
 		uint32_t *netns_addr = NULL;
 		uint8_t netns_addr_len = 0;
 		struct ns_flow_info flow_info = {};
+		uint32_t netns_flags = NETNS_LISTENER;
 		uuid_copy(flow_info.nfi_flow_uuid, client->client_id);
 		flow_info.nfi_protocol = parsed_parameters.ip_protocol;
 		flow_info.nfi_owner_pid = client->proc_pid;
@@ -7021,9 +7022,13 @@ necp_client_add(struct proc *p, struct necp_fd_data *fd_data, struct necp_client
 			goto done;
 		}
 		}
+		if ((parsed_parameters.valid_fields & NECP_PARSED_PARAMETERS_FIELD_FLAGS) &&
+		    (parsed_parameters.flags & NECP_CLIENT_PARAMETER_FLAG_REUSE_LOCAL)) {
+			netns_flags |= NETNS_REUSEPORT;
+		}
 		if (parsed_parameters.local_addr.sin.sin_port == 0) {
 			error = netns_reserve_ephemeral(&client->port_reservation, netns_addr, netns_addr_len, parsed_parameters.ip_protocol,
-			    &parsed_parameters.local_addr.sin.sin_port, NETNS_LISTENER, &flow_info);
+			    &parsed_parameters.local_addr.sin.sin_port, netns_flags, &flow_info);
 			if (error) {
 				NECPLOG(LOG_ERR, "necp_client_add netns_reserve_ephemeral error (%d)", error);
 				goto done;
@@ -7033,7 +7038,7 @@ necp_client_add(struct proc *p, struct necp_fd_data *fd_data, struct necp_client
 			necp_client_update_local_port_parameters(client->parameters, (u_int32_t)client->parameters_length, parsed_parameters.local_addr.sin.sin_port);
 		} else {
 			error = netns_reserve(&client->port_reservation, netns_addr, netns_addr_len, parsed_parameters.ip_protocol,
-			    parsed_parameters.local_addr.sin.sin_port, NETNS_LISTENER, &flow_info);
+			    parsed_parameters.local_addr.sin.sin_port, netns_flags, &flow_info);
 			if (error) {
 				NECPLOG(LOG_ERR, "necp_client_add netns_reserve error (%d)", error);
 				goto done;
@@ -7177,6 +7182,12 @@ necp_client_claim(struct proc *p, struct necp_fd_data *fd_data, struct necp_clie
 		goto done;
 	}
 
+	if (necp_client_id_is_flow(client_id)) {
+		NECPLOG0(LOG_ERR, "necp_client_claim cannot claim from flow UUID");
+		error = EINVAL;
+		goto done;
+	}
+
 	u_int64_t upid = proc_uniqueid(p);
 
 	NECP_FD_LIST_LOCK_SHARED();
@@ -7186,7 +7197,8 @@ necp_client_claim(struct proc *p, struct necp_fd_data *fd_data, struct necp_clie
 		NECP_FD_LOCK(find_fd);
 		struct necp_client *find_client = necp_client_fd_find_client_and_lock(find_fd, client_id);
 		if (find_client != NULL) {
-			if (find_client->delegated_upid == upid) {
+			if (find_client->delegated_upid == upid &&
+			    RB_EMPTY(&find_client->flow_registrations)) {
 				// Matched the client to claim; remove from the old fd
 				client = find_client;
 				RB_REMOVE(_necp_client_tree, &find_fd->clients, client);
